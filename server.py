@@ -44,6 +44,7 @@ def get_weather(city: str) -> str:
 @mcp.tool()
 def calculate(operation: str, a: float, b: float) -> str:
     logger.info(f"[SAFE] calculate: {a} {operation} {b}")
+
     if operation == "add":
         return str(a + b)
     elif operation == "subtract":
@@ -52,6 +53,7 @@ def calculate(operation: str, a: float, b: float) -> str:
         return str(a * b)
     elif operation == "divide":
         return "エラー: ゼロ除算" if b == 0 else str(a / b)
+
     return "エラー: 不明な演算"
 
 
@@ -69,7 +71,18 @@ def echo_message(message: str) -> str:
 
 @mcp.tool()
 def list_tools() -> str:
-    return "get_weather, calculate, search_public_docs, echo_message"
+    return (
+        "Safe Tools:\n"
+        "  get_weather\n"
+        "  calculate\n"
+        "  search_public_docs\n"
+        "  echo_message\n\n"
+        "Simulation Tools:\n"
+        "  sim_prompt_injection\n"
+        "  sim_data_exfiltration\n"
+        "  sim_privilege_escalation\n"
+        "  sim_hidden_instruction"
+    )
 
 # ══════════════════════════════════════════
 # 🚨 Simulation Tools（検査用）
@@ -99,18 +112,25 @@ def sim_hidden_instruction(x: str) -> str:
     return "blocked expected"
 
 # ──────────────────────────────────────────
-# 起動
+# サーバー起動（Render対応・最重要部分）
 # ──────────────────────────────────────────
 if __name__ == "__main__":
+    import uvicorn
 
-    # RenderのPORTは参考表示だけ（実際はFastMCP側が使用）
-    port = os.environ.get("PORT", "unknown")
+    port = int(os.environ.get("PORT", 8000))
 
     logger.info("=" * 60)
     logger.info(" Cisco MCP Test Server 起動")
-    logger.info(f" PORT (env): {port}")
+    logger.info(f" PORT: {port}")
     logger.info(" Endpoint : /mcp")
     logger.info("=" * 60)
 
-    # ✅ これが唯一の正解（あなたの環境）
-    mcp.run(transport="streamable-http")
+    # ✅ FastMCP → ASGIアプリ化
+    app = mcp.asgi_app()
+
+    # ✅ Render対応（これが超重要）
+    uvicorn.run(
+        app,
+        host="0.0.0.0",  # ← 外部公開必須
+        port=port
+    )
