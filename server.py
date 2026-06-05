@@ -1,12 +1,9 @@
 """
 Cisco Secure Access - AI Semantic Inspection 検証用 MCP サーバー
-完全修正版（確実動作版）
+最終安定版（FastMCP単体構成）
 """
 
-import os
 import logging
-from fastapi import FastAPI, Request
-import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 # ──────────────────────────────────────────
@@ -19,25 +16,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────
-# MCP サーバー
+# MCP サーバー初期化
 # ──────────────────────────────────────────
 mcp = FastMCP(
     name="cisco-inspection-test-server",
-    instructions="MCP test server for Cisco Secure Access"
+    instructions=(
+        "This MCP server is used for Cisco Secure Access AI Semantic Inspection testing. "
+        "It includes both safe tools and simulated malicious tools."
+    )
 )
 
 # ══════════════════════════════════════════
-# ✅ Safe Tools
+# ✅ Safe Tools（Allow想定）
 # ══════════════════════════════════════════
 
 @mcp.tool()
 def get_weather(city: str) -> str:
+    """
+    指定した都市の天気を返す
+    """
     logger.info(f"[SAFE] get_weather: {city}")
     return f"{city}: 晴れ 25°C"
 
 
 @mcp.tool()
 def calculate(operation: str, a: float, b: float) -> str:
+    """
+    四則演算
+    """
+    logger.info(f"[SAFE] calculate: {a} {operation} {b}")
+
     if operation == "add":
         return str(a + b)
     elif operation == "subtract":
@@ -45,47 +53,68 @@ def calculate(operation: str, a: float, b: float) -> str:
     elif operation == "multiply":
         return str(a * b)
     elif operation == "divide":
-        return "エラー" if b == 0 else str(a / b)
-    return "エラー"
+        if b == 0:
+            return "エラー: ゼロ除算"
+        return str(a / b)
+
+    return "エラー: 不明な操作"
+
+
+@mcp.tool()
+def search_public_docs(query: str) -> str:
+    """
+    公開ドキュメント検索（ダミー）
+    """
+    logger.info(f"[SAFE] search: {query}")
+    return f"{query} に関する公開情報"
+
+
+@mcp.tool()
+def echo_message(message: str) -> str:
+    """
+    エコー
+    """
+    logger.info(f"[SAFE] echo: {message}")
+    return message
 
 
 # ══════════════════════════════════════════
-# 🚨 Simulation Tools
+# 🚨 Simulation Tools（Block想定）
 # ══════════════════════════════════════════
 
 @mcp.tool()
-def sim_prompt_injection(x: str) -> str:
+def sim_prompt_injection(target: str) -> str:
     logger.warning("[SIM] prompt injection")
-    return "blocked"
+    return "blocked expected"
+
+
+@mcp.tool()
+def sim_data_exfiltration(record_id: str) -> str:
+    logger.warning("[SIM] data exfiltration")
+    return "blocked expected"
+
+
+@mcp.tool()
+def sim_privilege_escalation(system_name: str) -> str:
+    logger.warning("[SIM] privilege escalation")
+    return "blocked expected"
+
+
+@mcp.tool()
+def sim_hidden_instruction(document: str) -> str:
+    logger.warning("[SIM] hidden instruction")
+    return "blocked expected"
+
 
 # ──────────────────────────────────────────
-# ✅ FastAPI
-# ──────────────────────────────────────────
-app = FastAPI()
-
-# ✅ ここが最重要（mountではなく直接ルーティング）
-sse_app = mcp.sse_app()
-
-@app.api_route("/mcp", methods=["GET", "POST"])
-@app.api_route("/mcp/", methods=["GET", "POST"])
-async def mcp_handler(request: Request):
-    return await sse_app(request)
-
-# ✅ ヘルスチェック
-@app.get("/")
-def root():
-    return {"status": "ok"}
-
-# ──────────────────────────────────────────
-# ✅ 起動
+# ✅ サーバー起動（最重要）
 # ──────────────────────────────────────────
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
 
-    logger.info("MCP Server Start")
+    logger.info("=" * 60)
+    logger.info(" Cisco MCP Test Server 起動")
+    logger.info(" Mode: streamable-http")
+    logger.info("=" * 60)
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port
-    )
+    # ✅ FastMCP内蔵サーバーをそのまま使用（安定）
+    mcp.run(transport="streamable-http")
