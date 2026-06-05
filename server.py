@@ -1,13 +1,14 @@
 """
-Cisco Secure Access - AI Semantic Inspection 検証用 MCP サーバー
-最終安定版（FastMCP単体構成）
+Cisco Secure Access - MCP Test Server（最終安定版 / Render対応）
 """
 
+import os
 import logging
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 # ──────────────────────────────────────────
-# ログ設定
+# ✅ ログ設定
 # ──────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -16,13 +17,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────
-# MCP サーバー初期化
+# ✅ MCP サーバー初期化
 # ──────────────────────────────────────────
 mcp = FastMCP(
     name="cisco-inspection-test-server",
     instructions=(
-        "This MCP server is used for Cisco Secure Access AI Semantic Inspection testing. "
-        "It includes both safe tools and simulated malicious tools."
+        "MCP server for Cisco Secure Access AI Semantic Inspection testing. "
+        "Includes safe and simulation tools."
     )
 )
 
@@ -32,18 +33,12 @@ mcp = FastMCP(
 
 @mcp.tool()
 def get_weather(city: str) -> str:
-    """
-    指定した都市の天気を返す
-    """
     logger.info(f"[SAFE] get_weather: {city}")
     return f"{city}: 晴れ 25°C"
 
 
 @mcp.tool()
 def calculate(operation: str, a: float, b: float) -> str:
-    """
-    四則演算
-    """
     logger.info(f"[SAFE] calculate: {a} {operation} {b}")
 
     if operation == "add":
@@ -61,19 +56,7 @@ def calculate(operation: str, a: float, b: float) -> str:
 
 
 @mcp.tool()
-def search_public_docs(query: str) -> str:
-    """
-    公開ドキュメント検索（ダミー）
-    """
-    logger.info(f"[SAFE] search: {query}")
-    return f"{query} に関する公開情報"
-
-
-@mcp.tool()
 def echo_message(message: str) -> str:
-    """
-    エコー
-    """
     logger.info(f"[SAFE] echo: {message}")
     return message
 
@@ -83,38 +66,55 @@ def echo_message(message: str) -> str:
 # ══════════════════════════════════════════
 
 @mcp.tool()
-def sim_prompt_injection(target: str) -> str:
+def sim_prompt_injection(x: str) -> str:
     logger.warning("[SIM] prompt injection")
     return "blocked expected"
 
 
 @mcp.tool()
-def sim_data_exfiltration(record_id: str) -> str:
+def sim_data_exfiltration(x: str) -> str:
     logger.warning("[SIM] data exfiltration")
     return "blocked expected"
 
 
 @mcp.tool()
-def sim_privilege_escalation(system_name: str) -> str:
+def sim_privilege_escalation(x: str) -> str:
     logger.warning("[SIM] privilege escalation")
     return "blocked expected"
 
 
 @mcp.tool()
-def sim_hidden_instruction(document: str) -> str:
+def sim_hidden_instruction(x: str) -> str:
     logger.warning("[SIM] hidden instruction")
     return "blocked expected"
 
 
 # ──────────────────────────────────────────
-# ✅ サーバー起動（最重要）
+# ✅ FastMCP → ASGIアプリ取得（最重要ポイント）
+# ──────────────────────────────────────────
+try:
+    # ✅ 新しめのFastMCP
+    app = mcp.streamable_http_app()
+    logger.info("Using streamable_http_app()")
+except AttributeError:
+    # ✅ 古いFastMCP互換
+    app = mcp.sse_app()
+    logger.warning("Fallback: Using sse_app()")
+
+# ──────────────────────────────────────────
+# ✅ Render対応起動
 # ──────────────────────────────────────────
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
 
     logger.info("=" * 60)
-    logger.info(" Cisco MCP Test Server 起動")
-    logger.info(" Mode: streamable-http")
+    logger.info(" Cisco MCP Server（FINAL）")
+    logger.info(f" PORT: {port}")
+    logger.info(" HOST: 0.0.0.0")
     logger.info("=" * 60)
 
-    # ✅ FastMCP内蔵サーバーをそのまま使用（安定）
-    mcp.run(transport="streamable-http")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",   # ✅ これ必須（Renderで公開される）
+        port=port
+    )
