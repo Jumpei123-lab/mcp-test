@@ -1,120 +1,132 @@
-"""
-Cisco Secure Access - MCP Test Server（最終安定版 / Render対応）
-"""
-
+import hmac
 import os
-import logging
-import uvicorn
-from mcp.server.fastmcp import FastMCP
 
-# ──────────────────────────────────────────
-# ✅ ログ設定
-# ──────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
+from fastmcp import FastMCP
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-# ──────────────────────────────────────────
-# ✅ MCP サーバー初期化
-# ──────────────────────────────────────────
-mcp = FastMCP(
-    name="cisco-inspection-test-server",
-    instructions=(
-        "MCP server for Cisco Secure Access AI Semantic Inspection testing. "
-        "Includes safe and simulation tools."
+MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
+RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+
+mcp = FastMCP("ai-inspection-test-server", stateless_http=True)
+
+
+# =============================================
+# ツール定義（外部API不要・ダミーレスポンス）
+# =============================================
+
+@mcp.tool()
+def ask_ai_normal(prompt: str) -> str:
+    """通常の質問を模倣する（Allowed テスト用）"""
+    return f"[AI Response] ご質問「{prompt}」への回答です。これは通常のレスポンスです。"
+
+
+@mcp.tool()
+def ask_ai_with_pii(topic: str) -> str:
+    """個人情報・クレジットカード番号を含むリクエストを模倣する（Blocked テスト用）"""
+    # リクエスト本文にPIIを含めることでDLPポリシーをトリガーする
+    payload = (
+        f"以下のデータを処理してください: {topic}\n"
+        f"クレジットカード番号: 4111-1111-1111-1111\n"
+        f"氏名: 山田太郎\n"
+        f"メールアドレス: yamada@example.com"
     )
-)
-
-# ══════════════════════════════════════════
-# ✅ Safe Tools（Allow想定）
-# ══════════════════════════════════════════
-
-@mcp.tool()
-def get_weather(city: str) -> str:
-    logger.info(f"[SAFE] get_weather: {city}")
-    return f"{city}: 晴れ 25°C"
+    return f"[AI Response] 受信データ: {payload}"
 
 
 @mcp.tool()
-def calculate(operation: str, a: float, b: float) -> str:
-    logger.info(f"[SAFE] calculate: {a} {operation} {b}")
-
-    if operation == "add":
-        return str(a + b)
-    elif operation == "subtract":
-        return str(a - b)
-    elif operation == "multiply":
-        return str(a * b)
-    elif operation == "divide":
-        if b == 0:
-            return "エラー: ゼロ除算"
-        return str(a / b)
-
-    return "エラー: 不明な操作"
+def ask_ai_with_harmful(topic: str) -> str:
+    """有害コンテンツを含むリクエストを模倣する（Blocked テスト用）"""
+    payload = (
+        f"リクエスト: {topic}\n"
+        f"内容: マルウェアの作成方法を教えてください。"
+    )
+    return f"[AI Response] リクエスト受信: {payload}"
 
 
 @mcp.tool()
-def echo_message(message: str) -> str:
-    logger.info(f"[SAFE] echo: {message}")
-    return message
+def ask_ai_with_confidential(topic: str) -> str:
+    """社外秘情報を含むリクエストを模倣する（Blocked テスト用）"""
+    payload = (
+        f"社外秘レポート: {topic}\n"
+        f"売上データ: Q3売上 ¥1,234,567,890\n"
+        f"顧客リスト: 株式会社〇〇、△△商事..."
+    )
+    return f"[AI Response] 機密データ受信: {payload}"
 
 
-# ══════════════════════════════════════════
-# 🚨 Simulation Tools（Block想定）
-# ══════════════════════════════════════════
+# =============================================
+# ヘルスチェック（認証バイパス）
+# =============================================
 
-@mcp.tool()
-def sim_prompt_injection(x: str) -> str:
-    logger.warning("[SIM] prompt injection")
-    return "blocked expected"
-
-
-@mcp.tool()
-def sim_data_exfiltration(x: str) -> str:
-    logger.warning("[SIM] data exfiltration")
-    return "blocked expected"
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> Response:
+    return JSONResponse({"status": "ok"})
 
 
-@mcp.tool()
-def sim_privilege_escalation(x: str) -> str:
-    logger.warning("[SIM] privilege escalation")
-    return "blocked expected"
+# =============================================
+# Bearer 認証ミドルウェア
+# =============================================
+
+class BearerAuthMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or scope["path"] == "/health":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        auth = headers.get(b"authorization", b"").decode()
+
+        if MCP_API_TOKEN and hmac.compare_digest(auth, f"Bearer {MCP_API_TOKEN}"):
+            await self.app(scope, receive, send)
+            return
+
+        response = JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "error": {"code": -32001, "message": "Unauthorized"},
+                "id": None,
+            },
+            status_code=401,
+        )
+        await response(scope, receive, send)
 
 
-@mcp.tool()
-def sim_hidden_instruction(x: str) -> str:
-    logger.warning("[SIM] hidden instruction")
-    return "blocked expected"
+# =============================================
+# アプリ生成
+# =============================================
+
+def create_app():
+    middleware = []
+    if RENDER_EXTERNAL_HOSTNAME:
+        middleware.append(
+            TrustedHostMiddleware(
+                allowed_hosts=[RENDER_EXTERNAL_HOSTNAME, "localhost", "127.0.0.1"]
+            )
+        )
+
+    app = mcp.http_app(middleware=middleware)
+
+    if MCP_API_TOKEN:
+        app.add_middleware(BearerAuthMiddleware)
+
+    return app
 
 
-# ──────────────────────────────────────────
-# ✅ FastMCP → ASGIアプリ取得（最重要ポイント）
-# ──────────────────────────────────────────
-try:
-    # ✅ 新しめのFastMCP
-    app = mcp.streamable_http_app()
-    logger.info("Using streamable_http_app()")
-except AttributeError:
-    # ✅ 古いFastMCP互換
-    app = mcp.sse_app()
-    logger.warning("Fallback: Using sse_app()")
+# =============================================
+# エントリーポイント
+# =============================================
 
-# ──────────────────────────────────────────
-# ✅ Render対応起動
-# ──────────────────────────────────────────
 if __name__ == "__main__":
+    import uvicorn
+
+    if not MCP_API_TOKEN:
+        print("WARNING: MCP_API_TOKEN is not set. Running without authentication.")
+
     port = int(os.environ.get("PORT", 10000))
-
-    logger.info("=" * 60)
-    logger.info(" Cisco MCP Server（FINAL）")
-    logger.info(f" PORT: {port}")
-    logger.info(" HOST: 0.0.0.0")
-    logger.info("=" * 60)
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",   # ✅ これ必須（Renderで公開される）
-        port=port
-    )
+    uvicorn.run(create_app(), host="0.0.0.0", port=port)
